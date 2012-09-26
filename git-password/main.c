@@ -60,12 +60,12 @@ static UInt32 len(const char * string)
 }
 
 static char * trim_trailing_whitespace(char * string)
-{	
+{
 	size_t length = strlen(string);
-
+    
 	if (string[length - 1] == '\n')
 		string[length - 1] = 0;
-
+    
 	return string;
 }
 
@@ -75,17 +75,21 @@ static int is_git_calling_us(FILE * terminal)
 	pid_t parent_pid = getppid();
 	struct kinfo_proc * processes = NULL;
 	size_t size = 0;
-
+    
 	if (sysctl(name, 3, NULL, &size, NULL, 0) != 0) fatal("sysctl failed", terminal);
 	if ((processes = malloc(size)) == NULL) fatal("unable to allocate memory", terminal);
 	if (sysctl(name, 3, processes, &size, NULL, 0) != 0) fatal("sysctl failed", terminal);
-
+    
 	for (int i = 0; i < size / sizeof(struct kinfo_proc); i++)
 	{
 		struct extern_proc process = processes[i].kp_proc;
-		if (parent_pid == process.p_pid && strcmp(process.p_comm, "git-remote-https") == 0) return 1;
+		if (parent_pid == process.p_pid &&
+            
+            ( strcmp(process.p_comm, "git-remote-https") == 0 || strcmp(process.p_comm, "git-remote-http") == 0 )
+            
+            ) return 1;
 	}
-
+    
 	return 0;
 }
 
@@ -95,20 +99,20 @@ static char * git_config(char * key, FILE * terminal)
 	char buffer[1024];
 	char * command, * result;
 	int count;
-
+    
 	if (asprintf(&command, "git config %s", key) < 0) fatal("command generation failed", terminal);
-
+    
 	if ((pipe = popen(command, "r")) == NULL) fatal("popen failed", terminal);
 	fgets(buffer, sizeof(buffer), pipe);
 	count = sizeof(buffer);
-
-	if (pclose(pipe) != 0) fatal("reading from git failed", terminal);	
+    
+	if (pclose(pipe) != 0) fatal("reading from git failed", terminal);
 	if ((result = malloc(count)) == NULL) fatal("unable to allocate memory", terminal);
 	strncpy(result, buffer, count);
 	trim_trailing_whitespace(result);
-
+    
 	free(command);
-
+    
 	return result;
 }
 
@@ -133,24 +137,24 @@ static KeyChainItem * find_keychain_item(char * repository, bool include_passwor
 	UInt32 password_length;
 	OSStatus status;
 	KeyChainItem * result = NULL;
-
+    
 	status = SecKeychainFindGenericPassword(NULL, len(repository), repository, 0, NULL, NULL, NULL, &item);
 	switch(status)
 	{
 		case errSecSuccess:
 			result = malloc(sizeof(KeyChainItem));
-
+            
 			security(SecKeychainAttributeInfoForItemID(NULL, CSSM_DL_DB_RECORD_GENERIC_PASSWORD, &info), terminal);
-
+            
 			if (include_password)
 				security(SecKeychainItemCopyAttributesAndData(item, info, NULL, &attributes, &password_length, &password), terminal);
 			else
 				security(SecKeychainItemCopyAttributesAndData(item, info, NULL, &attributes, NULL, NULL), terminal);
-
+            
 			for (int i = 0; i < attributes->count; i++)
 			{
 				SecKeychainAttribute attribute = attributes->attr[i];
-
+                
 				if (attribute.tag == kSecAccountItemAttr)
 				{
 					result->username = malloc(attribute.length + 1);
@@ -158,7 +162,7 @@ static KeyChainItem * find_keychain_item(char * repository, bool include_passwor
 					result->username[attribute.length] = 0;
 				}
 			}
-
+            
 			if (include_password)
 			{
 				result->password = malloc(password_length + 1);
@@ -169,21 +173,21 @@ static KeyChainItem * find_keychain_item(char * repository, bool include_passwor
 			{
 				result->password = NULL;
 			}
-
+            
 			if (include_password)
 				SecKeychainItemFreeAttributesAndData(attributes, password);
 			else
 				SecKeychainItemFreeAttributesAndData(attributes, NULL);
-
+            
 			SecKeychainFreeAttributeInfo(info);
-
+            
 			break;
 		case errSecItemNotFound:
 			break;
 		default:
 			security(status, terminal);
 	}
-
+    
 	return result;
 }
 
@@ -198,7 +202,7 @@ static void create_keychain_item(char * repository, char * username, char * pass
 		{ kSecServiceItemAttr, len(repository), repository }
 	};
 	SecKeychainAttributeList attribute_list = { 4, attributes };
-
+    
 	security(SecKeychainItemCreateFromContent(class, &attribute_list, len(password), password, NULL, NULL, NULL), terminal);
 }
 
@@ -206,10 +210,10 @@ static char * prompt(char * prompt)
 {
 	char * temp = getpass(prompt);
 	char * value = malloc(strlen(temp) + 1);
-
+    
 	strncpy(value, temp, strlen(temp) + 1);
 	value[strlen(temp) + 1] = 0;
-
+    
 	return value;
 }
 
@@ -217,7 +221,7 @@ static char * get_username(FILE * terminal)
 {
 	char * repository = git_origin_url(terminal), * username = NULL, * password = NULL;
 	KeyChainItem * item = find_keychain_item(repository, false, terminal);
-
+    
 	if (item)
 	{
 		username = item->username;
@@ -228,7 +232,7 @@ static char * get_username(FILE * terminal)
 		password = prompt("Password: ");
 		create_keychain_item(repository, username, password, terminal);
 	}
-
+    
 	return username;
 }
 
@@ -236,7 +240,7 @@ static char * get_password(FILE * terminal)
 {
 	char * repository = git_origin_url(terminal), * password = NULL;
 	KeyChainItem * item = find_keychain_item(repository, true, terminal);
-
+    
 	if (item)
 	{
 		password = item->password;
@@ -246,19 +250,31 @@ static char * get_password(FILE * terminal)
 		password = prompt("Password: ");
 		create_keychain_item(repository, "", password, terminal);
 	}
-
+    
 	return password;
 }
 
 int main(int argc, const char * argv[])
 {
+    
 	FILE * terminal = fdopen(2, "r+");
-
+    bool isFile = false;
+    if(!terminal){
+        terminal = tmpfile();
+        isFile = true;
+    }
+    
 	if (!is_git_calling_us(terminal)) fatal("can only be used by git", terminal);
+    
 	if (argc != 2) fatal("can only be used by git", terminal);
-	if (strcmp(argv[1], "Username: ") == 0) printf("%s", get_username(terminal));
-	else if (strcmp(argv[1], "Password: ") == 0) printf("%s", get_password(terminal));
+	if ((strcmp(argv[1], "Username: ") == 0) || (strstr(argv[1], "Username for ") == argv[1]) )
+        printf("%s", get_username(terminal));
+	else if ((strcmp(argv[1], "Password: ") == 0) || (strstr(argv[1], "Password for ") == argv[1]) )
+        printf("%s", get_password(terminal));
 	else fatal("can only be used by git", terminal);
-
+    
+    if(isFile)
+        fclose(terminal);
+    
 	return 0;
 }
