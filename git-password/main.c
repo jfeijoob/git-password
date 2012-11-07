@@ -34,6 +34,10 @@
 #include <Security/SecKeychain.h>
 #include <Security/SecKeychainSearch.h>
 
+FILE * globalTerminal = NULL;
+
+
+
 static void fatal(const char * message, FILE * terminal)
 {
 	char * fatal;
@@ -217,9 +221,16 @@ static char * prompt(char * prompt)
 	return value;
 }
 
-static char * get_username(FILE * terminal)
+static char * get_username(FILE * terminal, const char *host )
 {
-	char * repository = git_origin_url(terminal), * username = NULL, * password = NULL;
+	char * repository;
+    char * username = NULL, * password = NULL;
+    
+    if( host != NULL )
+        repository = (char *)host;
+    else
+        repository = git_origin_url(terminal);
+    
 	KeyChainItem * item = find_keychain_item(repository, false, terminal);
     
 	if (item)
@@ -236,9 +247,16 @@ static char * get_username(FILE * terminal)
 	return username;
 }
 
-static char * get_password(FILE * terminal)
+static char * get_password(FILE * terminal, const char *host)
 {
-	char * repository = git_origin_url(terminal), * password = NULL;
+	char *repository;
+    char * password = NULL;
+    
+    if( host != NULL )
+        repository = (char *)host;
+    else
+        repository = git_origin_url(terminal);
+    
 	KeyChainItem * item = find_keychain_item(repository, true, terminal);
     
 	if (item)
@@ -254,27 +272,58 @@ static char * get_password(FILE * terminal)
 	return password;
 }
 
+const char * getHostFromCmdParameter( const char * parameter ){
+    
+
+    static char buffer[255];
+    
+    if(parameter == NULL)
+        return NULL;
+
+    char * fatal;
+	asprintf(&fatal, "Parameter: %s\n", parameter);
+	fputs(fatal, globalTerminal);
+
+    
+    char * start = strchr( parameter, '\'' );
+    if(start == NULL || start-parameter+1 >= strlen( parameter ) )
+        return NULL;
+    
+    start++;
+
+    char * end = strchr( start, '\'' );
+    if(end == NULL)
+        return NULL;
+    
+    strlcpy(buffer, start, end-start+1);
+    
+    asprintf(&fatal, "Result: %s\n", buffer);
+	fputs(fatal, globalTerminal);
+
+    return buffer;
+}
+
 int main(int argc, const char * argv[])
 {
     
-	FILE * terminal = fdopen(2, "r+");
+	globalTerminal = fdopen(2, "r+");
     bool isFile = false;
-    if(!terminal){
-        terminal = tmpfile();
+    if(!globalTerminal){
+        globalTerminal = tmpfile();
         isFile = true;
     }
     
-	if (!is_git_calling_us(terminal)) fatal("can only be used by git", terminal);
+	if (!is_git_calling_us(globalTerminal)) fatal("can only be used by git", globalTerminal);
     
-	if (argc != 2) fatal("can only be used by git", terminal);
+	if (argc != 2) fatal("can only be used by git", globalTerminal);
 	if ((strcmp(argv[1], "Username: ") == 0) || (strstr(argv[1], "Username for ") == argv[1]) )
-        printf("%s", get_username(terminal));
+        printf("%s", get_username(globalTerminal, getHostFromCmdParameter(argv[1])));
 	else if ((strcmp(argv[1], "Password: ") == 0) || (strstr(argv[1], "Password for ") == argv[1]) )
-        printf("%s", get_password(terminal));
-	else fatal("can only be used by git", terminal);
+        printf("%s", get_password(globalTerminal, getHostFromCmdParameter(argv[1])));
+	else fatal("can only be used by git", globalTerminal);
     
     if(isFile)
-        fclose(terminal);
+        fclose(globalTerminal);
     
 	return 0;
 }
